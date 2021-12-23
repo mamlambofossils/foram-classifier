@@ -1,6 +1,3 @@
-#!/usr/bin/python
-#coding=utf-8
-
 import os
 import pickle
 import keras
@@ -31,25 +28,22 @@ from tensorflow.keras.optimizers import Adam
 # |   |   ├── class2_train_img1.jpg
 # |   |   ├── class2_train_img2.jpg
 # |   |   └── ...
-# ├── validation/
-# |   ├── class1
-# |   |   ├── class1_val_img1.jpg
-# |   |   ├── class1_val_img2.jpg
-# |   |   └── ...
-# |   └── ...
-# └── weights/
-#     ├── weights_file_1.h5
-#     ├── weights_file_2.h5
+# └── validation/
+#     ├── class1
+#     |   ├── class1_val_img1.jpg
+#     |   ├── class1_val_img2.jpg
+#     |   └── ...
 #     └── ...
 #
 # Outputs the following files (with user-specified analysis ID prefixes):
-#   model.h5            weights file for best-performing model
+#   final_model_save/   Directory containing the best-performing model in the TensorFlow SavedModel format
 #   history.pkl         pickle file containing history of training/validation accuracy and loss rates throughout the run
 #   predictions.pkl     pickle file containing predictions by model for all validation images
 #   confusion.pkl       pickle file containing raw data to generate confusion matrix
 #   labels.pkl          pickle file containing all class labels
 #
 # Note: Weights files can be downloaded at: https://github.com/fchollet/deep-learning-models/releases/
+
 
 # Get information on available GPUs in system
 tf.config.list_physical_devices('GPU')
@@ -65,7 +59,7 @@ top3_acc.__name__ = 'top3_acc'
 base_dir = ''
 
 # Path to directory to which output will be saved (will be created it it doesn't exist)
-output_dir = ''
+output_dir = 'output'
 
 # Analysis number (or any other run identifier)
 analysis_id = ''
@@ -85,19 +79,19 @@ analysis_id = ''
 #   num_train_samples       total number of training samples                                                     #
 #   num_validation_samples  total number of validation samples                                                   #
 ##################################################################################################################
-augment = False
+augment = True
 reg = False
 img_width, img_height = 160,160
-batch_size = 200
-epochs = 50
+batch_size = 32
+epochs = 2
 lrate = 0.0001
-adjust_lrate = True
+adjust_lrate = False
 drop = 0.5
 lmbda = 0.01
 num_feat = 2
-num_classes = 36
-num_train_samples = 27737
-num_validation_samples = 6903
+num_classes = 31
+num_train_samples = 22139
+num_validation_samples = 5545
 ################################################ USER INPUT ENDS #################################################
 
 
@@ -105,24 +99,10 @@ num_validation_samples = 6903
 train_data_dir = os.path.join(base_dir,'train')
 validation_data_dir = os.path.join(base_dir,'validation')
 
-# Determine number of steps required to send all validation/training images
-# through one forward propogation. Note that if modulo(number of samples / batch size) != 0,
-# an extra step is required to pass the remainder images through the network
-if num_validation_samples % batch_size == 0:
-    validation_steps = num_validation_samples / batch_size
-else:
-    validation_steps = num_validation_samples / batch_size + 1
-
-if num_train_samples % batch_size == 0:
-    train_steps = num_train_samples / batch_size
-else:
-    train_steps = num_train_samples / batch_size + 1
-
-# Set weights and initialize model
+# Set weights and initialize models depending on chosen CNN
 # include_top is False because we want to add change the size of the final fully-connected
 # layer to match the number of classes in our specific problem
-weights = os.path.join(base_dir,'weights','vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5')
-model = applications.VGG16(weights=weights, include_top=False, input_shape = (img_width, img_height, 3))
+model = VGG16(include_top=False, input_shape = (img_width, img_height, 3))
 layer_freeze = 7
 
 # Now add additional layers for fine-tuning, regularization, dropout, Softmax, etc.
@@ -154,7 +134,8 @@ predictions = Dense(num_classes, activation="softmax")(x)
 # Finally, we connect the input model layers with the output fully-connected layer and compile
 model_final = Model(inputs = model.input, outputs = predictions)
 model_final.summary()
-model_final.compile(loss = "categorical_crossentropy", optimizer = optimizers.Adam(lr=lrate), metrics=['accuracy',top3_acc])
+model_final.compile(loss = "categorical_crossentropy", optimizer = Adam(learning_rate=lrate), metrics=['accuracy',top3_acc])
+
 
 # Data augmentation (if set) and data generators to read and process training/validation images
 if augment:
@@ -188,35 +169,38 @@ validation_generator = test_datagen.flow_from_directory(
         target_size = (img_height, img_width),
         class_mode = "categorical")
 
+
 # Create output directory if it doesn't exist
 if not os.path.exists(output_dir):
     os.mkdir(output_dir)
 
-# Set up checkpointing (saves best-performing model weights after each epoch)
-# Period should be 'epoch' as val_accuracy is not available before the epoch finishes
+# Set up checkpointing (saves best-performing model weights after each epoch) https://github.com/tensorflow/tensorflow/issues/33163
 checkpoint = ModelCheckpoint(os.path.join(output_dir,'analysis_{:s}_checkpoint.h5'.format(analysis_id)),
                              monitor='val_accuracy',
-                             verbose=1,
+                             verbose=0,
                              save_best_only=True,
                              save_weights_only=False,
                              mode='auto',
-                             period='epoch')
+                             save_freq='epoch')
+
 
 # Set up early stopping monitor (will stop run if validation accuracy doesn't improve for 10 epochs)
-early = EarlyStopping(monitor='val_acc',
+early = EarlyStopping(monitor='val_accuracy',
                       min_delta=0,
                       patience=10,
                       verbose=1,
                       mode='auto')
 
+
 # Set up automatic learning rate adjustment if requested
 if adjust_lrate:
-    reduceLR = ReduceLROnPlateau(monitor = 'val_acc',factor=0.5,
+    reduceLR = ReduceLROnPlateau(monitor = 'val_accuracy',factor=0.5,
                                    patience = 3, verbose = 1, mode = 'auto',
                                    min_delta = 0.005, min_lr = 0.00001)
     callbacks = [checkpoint, early, reduceLR]
 else:
     callbacks = [checkpoint, early]
+
 
 # Run model training using generator
 history = model_final.fit(train_generator, epochs=epochs, validation_data = validation_generator, callbacks=callbacks) 
@@ -228,13 +212,15 @@ model_final.save('final_model_save')
 with open(os.path.join(output_dir,'analysis_{:s}_history.pkl'.format(analysis_id)), 'wb') as f:
     pickle.dump(history.history,f)
 
-# Save confusion matrix, classification report, and label map. I used the labels when doing the predictions using the model
+
+# Save confusion matrix, classification report, and label map
 Y_pred = model_final.predict_generator(validation_generator)
 y_pred = np.argmax(Y_pred, axis=1)
 confusion = confusion_matrix(validation_generator.classes, y_pred)
 label_map = (validation_generator.class_indices)
 labels = sorted(label_map.keys())
 report = classification_report(validation_generator.classes, y_pred, target_names=labels)
+
 
 with open(os.path.join(output_dir,'analysis_{:s}_predictions.pkl'.format(analysis_id)),'wb') as handle:
     pickle.dump(report,handle)
