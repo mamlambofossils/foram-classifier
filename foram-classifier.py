@@ -76,22 +76,18 @@ analysis_id = ''
 #   lmbda                   lambda parameter of L1/L2 regularization                                             #
 #   num_feat                number of augmentation 'treatments' to use (options: 2 or 5)                         #
 #   num_classes             total number of classes                                                              #
-#   num_train_samples       total number of training samples                                                     #
-#   num_validation_samples  total number of validation samples                                                   #
 ##################################################################################################################
 augment = True
 reg = False
 img_width, img_height = 160,160
 batch_size = 32
-epochs = 2
+epochs = 50
 lrate = 0.0001
-adjust_lrate = False
+adjust_lrate = True
 drop = 0.5
 lmbda = 0.01
 num_feat = 2
-num_classes = 31
-num_train_samples = 22139
-num_validation_samples = 5545
+num_classes = 36
 ################################################ USER INPUT ENDS #################################################
 
 
