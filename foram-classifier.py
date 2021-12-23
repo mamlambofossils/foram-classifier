@@ -6,6 +6,7 @@ import pickle
 import keras
 import functools
 import numpy as np
+import tensorflow as tf
 
 from keras import applications
 from keras.preprocessing.image import ImageDataGenerator, array_to_img, img_to_array, load_img
@@ -16,6 +17,8 @@ from keras.layers import Dropout, Flatten, Dense, GlobalAveragePooling2D
 from keras import backend as k
 from keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 from sklearn.metrics import classification_report, confusion_matrix
+from tensorflow.keras.applications.vgg16 import VGG16
+from tensorflow.keras.optimizers import Adam
 
 # Structure of data directories expected
 # base_dir/
@@ -49,7 +52,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 # Note: Weights files can be downloaded at: https://github.com/fchollet/deep-learning-models/releases/
 
 # Get information on available GPUs in system
-k.tensorflow_backend._get_available_gpus()
+tf.config.list_physical_devices('GPU')
 
 # Set up top-3 accuracy metric
 top3_acc = functools.partial(keras.metrics.top_k_categorical_accuracy, k=3)
@@ -68,7 +71,6 @@ output_dir = ''
 analysis_id = ''
 
 ################################################# RUN PARAMETERS #################################################
-#   cnn                     convolutional neural network to use (options: 'vgg16', 'inceptionv3', 'densenet121') #
 #   augment                 bool specifying whether data augmentation should be used                             #
 #   reg                     bool specifying whether L1/L2 regularization should be used                          #
 #   img_width, img_height   width and height in pixels that input images will be resized to                      #
@@ -83,7 +85,6 @@ analysis_id = ''
 #   num_train_samples       total number of training samples                                                     #
 #   num_validation_samples  total number of validation samples                                                   #
 ##################################################################################################################
-cnn = 'vgg16'
 augment = False
 reg = False
 img_width, img_height = 160,160
@@ -117,23 +118,12 @@ if num_train_samples % batch_size == 0:
 else:
     train_steps = num_train_samples / batch_size + 1
 
-# Set weights and initialize models depending on chosen CNN
+# Set weights and initialize model
 # include_top is False because we want to add change the size of the final fully-connected
 # layer to match the number of classes in our specific problem
-if cnn == 'vgg16':
-    weights = os.path.join(base_dir,'weights','vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5')
-    model = applications.VGG16(weights=weights, include_top=False, input_shape = (img_width, img_height, 3))
-    layer_freeze = 7
-
-if cnn == 'inceptionv3':
-    weights = os.path.join(base_dir,'weights','inception_v3_weights_tf_dim_ordering_tf_kernels_notop.h5')
-    model = applications.InceptionV3(weights=weights, include_top=False, input_shape = (img_width, img_height, 3))
-    layer_freeze = 249
-
-if cnn == 'densenet121':
-    weights = os.path.join(base_dir,'weights','densenet121_weights_tf_dim_ordering_tf_kernels_notop.h5')
-    model = applications.DenseNet121(weights=weights, include_top=False, input_shape = (img_width, img_height, 3))
-    layer_freeze = 313
+weights = os.path.join(base_dir,'weights','vgg16_weights_tf_dim_ordering_tf_kernels_notop.h5')
+model = applications.VGG16(weights=weights, include_top=False, input_shape = (img_width, img_height, 3))
+layer_freeze = 7
 
 # Now add additional layers for fine-tuning, regularization, dropout, Softmax, etc.
 # Freeze early layers (up to layer specified in layer_freeze) while allowing deeper layers
@@ -203,13 +193,14 @@ if not os.path.exists(output_dir):
     os.mkdir(output_dir)
 
 # Set up checkpointing (saves best-performing model weights after each epoch)
+# Period should be 'epoch' as val_accuracy is not available before the epoch finishes
 checkpoint = ModelCheckpoint(os.path.join(output_dir,'analysis_{:s}_checkpoint.h5'.format(analysis_id)),
-                             monitor='val_acc',
+                             monitor='val_accuracy',
                              verbose=1,
                              save_best_only=True,
                              save_weights_only=False,
                              mode='auto',
-                             period=1)
+                             period='epoch')
 
 # Set up early stopping monitor (will stop run if validation accuracy doesn't improve for 10 epochs)
 early = EarlyStopping(monitor='val_acc',
@@ -228,22 +219,16 @@ else:
     callbacks = [checkpoint, early]
 
 # Run model training using generator
-history = model_final.fit_generator(
-            train_generator,
-            steps_per_epoch = train_steps,
-            epochs = epochs,
-            validation_data = validation_generator,
-            validation_steps = validation_steps,
-            callbacks = callbacks)
+history = model_final.fit(train_generator, epochs=epochs, validation_data = validation_generator, callbacks=callbacks) 
 
-# Save best-performing model
-model_final.save(os.path.join(output_dir,'analysis_{:s}_model.h5'.format(analysis_id)))
+# Save best-performing model, in the newer "SavedModel" format. More info: https://www.tensorflow.org/guide/keras/save_and_serialize#savedmodel_format 
+model_final.save('final_model_save')
 
 # Save histories
 with open(os.path.join(output_dir,'analysis_{:s}_history.pkl'.format(analysis_id)), 'wb') as f:
     pickle.dump(history.history,f)
 
-# Save confusion matrix, classification report, and label map
+# Save confusion matrix, classification report, and label map. I used the labels when doing the predictions using the model
 Y_pred = model_final.predict_generator(validation_generator)
 y_pred = np.argmax(Y_pred, axis=1)
 confusion = confusion_matrix(validation_generator.classes, y_pred)
